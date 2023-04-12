@@ -21,13 +21,15 @@ Battery battery(2600, 6600, A0);
 #define NUMROWS (8)
 #define NUMCOLS (8)
 #define NUMPIXELS (NUMROWS * NUMCOLS)
-String versionId = "1.0.0";
+String versionId = "1.0.4";
 int buttonSettingsAddress = 0;
 
 const boolean showCustomImageDebug = false;
 const RgbColor black(0, 0, 0);
 RTCVars state;
 int shutdownInProgress;
+boolean testingMode = false;
+short currentTestPattern = 0;
 
 const uint32 bapLogo[64] = {
     0,
@@ -534,6 +536,7 @@ const char *password = "B@pB@p1234";
 const char *basePrivateTopic = "buttons";
 String privateTopicCmd = "temp/";
 String privateTopicRestart = "temp/";
+String privateTopicTesting = "temp/";
 String privateTopicAn = "temp/";
 String privateTopicStatus = "temp/";
 String privateTopicGetStatus = "temp/";
@@ -579,7 +582,7 @@ Bounce debouncer = Bounce();
 
 NeoPixelBrightnessBus<NeoGrbFeature, NeoEsp8266Dma800KbpsMethod> pixelMatrix(NUMPIXELS, 3);
 
-void SetPattern(short patternId, uint8_t red, uint8_t green, uint8_t blue, uint8_t brightness, bool overRideIfNotSet)
+void SetPattern(short patternId, uint8_t red, uint8_t green, uint8_t blue, uint8_t brightness)
 {
   pixelMatrix.SetBrightness(brightness);
   term.print(F("Setting the Pattern with id: "));
@@ -611,11 +614,7 @@ void SetPattern(short patternId, uint8_t red, uint8_t green, uint8_t blue, uint8
       }
       else
       {
-        // Turn Off
-        if (overRideIfNotSet)
-        {
           pixelMatrix.SetPixelColor(lcdIx, RgbColor(0, 0, 0));
-        }
       }
     }
   };
@@ -627,23 +626,24 @@ void SetPattern(short patternId, uint8_t red, uint8_t green, uint8_t blue, uint8
 void PowerOff()
 {
   term.print("This is a shutdown Command. Getting Ready to shut down");
-  SetPattern(3, 0, 255, 0, 32, true);
+  SetPattern(3, 0, 255, 0, 32);
   client.publish(privateTopicStatus.c_str(), "", true);
   client.unsubscribe(privateTopicCmd.c_str());
   // client.unsubscribe(privateTopicCustomImage.c_str());
   client.unsubscribe(privateTopicRestart.c_str());
   client.unsubscribe(privateTopicPowerOff.c_str());
   client.unsubscribe(privateTopicGetStatus.c_str());
+  client.unsubscribe(privateTopicTesting.c_str());
   client.unsubscribe(publicCmd.c_str());
   client.unsubscribe(publicStatus.c_str());
   client.unsubscribe(publicRestart.c_str());
   client.unsubscribe(publicPowerOff.c_str());
   delay(250);
-  SetPattern(2, 0, 255, 0, 32, true);
+  SetPattern(2, 0, 255, 0, 32);
   delay(500);
-  SetPattern(1, 0, 255, 0, 32, true);
+  SetPattern(1, 0, 255, 0, 32);
   delay(500);
-  SetPattern(100, 0, 255, 0, 32, true);
+  SetPattern(100, 0, 255, 0, 32);
   term.print("Shutdown Images Down. GoodBye");
   delay(1000);
   shutdownInProgress = 1;
@@ -678,7 +678,7 @@ void setup_wifi()
     term.print(".");
     if (wifiConnectionAttempts == 20 && buttonSettings.alternateWifiSSID.length() > 0)
     {
-      //This part is untested.
+      // This part is untested.
       correctSSID = ssid;
       correctPassword = password;
       WiFi.disconnect();
@@ -689,15 +689,15 @@ void setup_wifi()
   int dBm = WiFi.RSSI();
   if (dBm >= -60)
   {
-    SetPattern(157, 0, 255, 0, 32, true);
+    SetPattern(157, 0, 255, 0, 32);
   }
   if (dBm <= -90)
   {
-    SetPattern(159, 255, 0, 0, 32, true);
+    SetPattern(159, 255, 0, 0, 32);
   }
   else
   {
-    SetPattern(158, 255, 255, 0, 32, true);
+    SetPattern(158, 255, 255, 0, 32);
   }
 
   // timeClient.begin();
@@ -718,6 +718,7 @@ void setup_wifi()
   privateTopicButtonSettings = String("buttons/") + clientName + "/buttonsettings";
   // privateTopicCustomImage = String("buttons/") + clientName + "/customImage";
   privateTopicRestart = String("buttons/") + clientName + "/restart";
+  privateTopicTesting = String("buttons/") + clientName + "/testing";
 }
 
 void ApplyImageToLEDPanel(uint32 image[NUMPIXELS], uint8_t brightness)
@@ -795,7 +796,7 @@ void SendStatus(bool showDisplay)
     term.println("Showing status info");
     // SetPattern(164, 0, 255, 0, 32, true);
     uint8_t pattern = batteryLevel == 0 ? 100 : batteryLevel;
-    SetPattern(pattern, 0, 255, 0, 12, true);
+    SetPattern(pattern, 0, 255, 0, 12);
     pixelMatrix.Show();
     setTurnOffDisplay(3000, false);
   }
@@ -816,6 +817,7 @@ void callback(char *topic, byte *payload, unsigned int length)
   if (String(topic) == privateTopicCmd || String(topic) == publicCmd)
   {
     term.print("Its a button image");
+    testingMode = false;
     MsgPack::Unpacker unpacker;
     unpacker.feed(payload, length);
     unpacker.deserialize(buttonImage);
@@ -830,6 +832,7 @@ void callback(char *topic, byte *payload, unsigned int length)
   else if (String(topic) == publicStatus || String(topic) == privateTopicGetStatus)
   {
     SendStatus(true);
+    testingMode = false;
   }
   else if (String(topic) == privateTopicRestart || String(topic) == publicRestart)
   {
@@ -839,6 +842,12 @@ void callback(char *topic, byte *payload, unsigned int length)
   else if (String(topic) == privateTopicPowerOff || String(topic) == publicPowerOff)
   {
     PowerOff();
+  }
+  else if (String(topic) == privateTopicTesting)
+  {
+    testingMode = true;
+    currentTestPattern = 1;
+    SetPattern(currentTestPattern, 0, 255, 0, 32);
   }
   else if (String(topic) == privateTopicButtonSettings || String(topic) == publicButtonSettings)
   {
@@ -855,6 +864,7 @@ void subsAndAnnounce()
   client.subscribe(privateTopicRestart.c_str());
   client.subscribe(privateTopicPowerOff.c_str());
   client.subscribe(privateTopicGetStatus.c_str());
+  client.subscribe(privateTopicTesting.c_str());
   client.subscribe(publicCmd.c_str());
   client.subscribe(publicStatus.c_str());
   client.subscribe(publicRestart.c_str());
@@ -875,7 +885,7 @@ void reconnect()
     if (client.connect(clientId.c_str(), "", "", privateTopicStatus.c_str(), 0, true, "", true))
     {
       term.println("connected");
-      SetPattern(128, 0, 255, 0, 32, true);
+      SetPattern(128, 0, 255, 0, 32);
       setTurnOffDisplay(2000, false);
       subsAndAnnounce();
     }
@@ -913,8 +923,8 @@ void setup()
   digitalWrite(PowerOnPin, HIGH);
   battery.begin(3300, 2.0, &sigmoidal);
 
-  // Serial.begin(74880);
-  // term.link(Serial);
+  Serial.begin(74880);
+  term.link(Serial);
   pixelMatrix.Begin();
   pixelMatrix.Show();
   term.println("Showing the Bap Logo");
@@ -928,8 +938,9 @@ void setup()
   server.begin();
   term.setAsDefaultWhenUrlNotFound(); // optional : redirect any unknown url to /term.html
   term.activateArduinoFavicon();      // optional : send Arduino icon when a browser asks for favicon
-  term.println("WiFiTerm started");
+ 
   term.begin(server);
+  term.println("WiFiTerm started");
   term.print("I'm waiting for you at http://");
   term.print(WiFi.localIP());
   term.println("/term.html");
@@ -984,7 +995,7 @@ void loop()
     term.println(turnOffDisplayTime);
     term.println("setting lightNextChangeMillis it to 0");
     turnOffDisplayTime = 0;
-    SetPattern(0, 0, 0, 0, 32, true);
+    SetPattern(0, 0, 0, 0, 32);
   }
   if ((unsigned long)(currentMillis - commandLastRecievedMillis) >= powerOffInterval)
   {
@@ -999,6 +1010,15 @@ void loop()
 
   if (debouncer.fell())
   {
+    if (testingMode)
+    {
+      SetPattern(currentTestPattern,0,255,0,32);
+      currentTestPattern = currentTestPattern + 1;
+      if(currentTestPattern > 100)
+      {
+        currentTestPattern = 0;
+      }
+    }
     buttonFellAtMillis = millis();
     buttonPress.startOfPress = true;
     buttonPress.lengthOfPressInMillis = 0;
